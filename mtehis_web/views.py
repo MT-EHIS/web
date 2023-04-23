@@ -1,4 +1,5 @@
 import json
+import pickle
 import numpy as np
 import pandas as pd
 from django.http import StreamingHttpResponse
@@ -8,6 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from .toolset_pool import ToolsetPool
+from .models import Anomaly
 
 
 @require_POST
@@ -21,11 +23,23 @@ def detect_anomalies(request):
     toolset = ToolsetPool.get_or_load_toolset(data.get('toolset'))
     input_data = np.array(data.get('data'), dtype=np.float64)
 
-    predicted = toolset.detector.predict(input_data)
+    predicted, scores = toolset.detector.predict_with_scores(input_data)
 
     # TODO: classifier
 
-    # TODO: save anomalies to DB
+    inputs_with_anomalies = input_data[predicted == 1]
+    detector_scores_with_anomalies = scores[predicted == 1]
+
+    anomalies_count = len(inputs_with_anomalies)
+    for i in range(anomalies_count):
+        inputs = inputs_with_anomalies[i].tolist()
+        detector_scores = detector_scores_with_anomalies[i].tolist()
+        Anomaly.objects.create(
+            toolset_id=toolset.id,
+            inputs=pickle.dumps(inputs),
+            detector_scores=pickle.dumps(detector_scores),
+            label=None,
+        )
 
     return JsonResponse({'status': 'success', 'result': predicted.tolist()})
 
