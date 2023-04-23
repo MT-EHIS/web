@@ -6,42 +6,68 @@ from django.http import StreamingHttpResponse
 from streamad.util import CustomDS
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from .toolset_pool import ToolsetPool
 from .models import Anomaly
 
 
-@require_POST
 @csrf_exempt
 def detect_anomalies(request):
-    data = json.loads(request.body)
+    if request.method == 'POST':
+        data = json.loads(request.body)
 
-    if 'toolset' not in data or 'data' not in data:
-        return JsonResponse({'status': 'error', 'message': 'Request body must have "toolset" and "data" fields'})
+        if 'toolset' not in data or 'data' not in data:
+            return JsonResponse({'status': 'error', 'message': 'Request body must have "toolset" and "data" fields'})
 
-    toolset = ToolsetPool.get_or_load_toolset(data.get('toolset'))
-    input_data = np.array(data.get('data'), dtype=np.float64)
+        toolset = ToolsetPool.get_or_load_toolset(data.get('toolset'))
+        input_data = np.array(data.get('data'), dtype=np.float64)
 
-    predicted, scores = toolset.detector.predict_with_scores(input_data)
+        predicted, scores = toolset.detector.predict_with_scores(input_data)
 
-    # TODO: classifier
+        # TODO: classifier
 
-    inputs_with_anomalies = input_data[predicted == 1]
-    detector_scores_with_anomalies = scores[predicted == 1]
+        inputs_with_anomalies = input_data[predicted == 1]
+        detector_scores_with_anomalies = scores[predicted == 1]
 
-    anomalies_count = len(inputs_with_anomalies)
-    for i in range(anomalies_count):
-        inputs = inputs_with_anomalies[i].tolist()
-        detector_scores = detector_scores_with_anomalies[i].tolist()
-        Anomaly.objects.create(
-            toolset_id=toolset.id,
-            inputs=pickle.dumps(inputs),
-            detector_scores=pickle.dumps(detector_scores),
-            label=None,
-        )
+        anomalies_count = len(inputs_with_anomalies)
+        for i in range(anomalies_count):
+            inputs = inputs_with_anomalies[i].tolist()
+            detector_scores = detector_scores_with_anomalies[i].tolist()
+            Anomaly.objects.create(
+                toolset_id=toolset.id,
+                inputs=pickle.dumps(inputs),
+                detector_scores=pickle.dumps(detector_scores),
+                label=None,
+            )
 
-    return JsonResponse({'status': 'success', 'result': predicted.tolist()})
+        return JsonResponse({'status': 'success', 'result': predicted.tolist()})
+
+    elif request.method == 'GET':
+        toolset_name = request.GET.get('toolset')
+        datetime_from = request.GET.get('from', None)
+        datetime_to = request.GET.get('to', None)
+
+        query_filter = {'toolset__name': toolset_name}
+        if datetime_from is not None:
+            query_filter['created_at__gte'] = datetime_from
+        if datetime_to is not None:
+            query_filter['created_at__lte'] = datetime_to
+
+        anomalies = Anomaly.objects.filter(**query_filter)
+
+        result = list(anomalies.values())
+        for item in result:
+            item['inputs'] = pickle.loads(item['inputs'])
+            item['detector_scores'] = pickle.loads(item['detector_scores'])
+            if item['classifier_scores'] is not None and len(item['classifier_scores']) > 0:
+                item['classifier_scores'] = pickle.loads(item['classifier_scores'])
+            else:
+                item['classifier_scores'] = None
+
+        return JsonResponse({'status': 'success', 'result': result})
+
+    else:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
 
 
 @csrf_exempt
